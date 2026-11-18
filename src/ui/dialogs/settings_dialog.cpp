@@ -102,6 +102,7 @@ SettingsDialog::SettingsDialog(
        {"Filter current folder", luciole::TypingMode::Filter},
        {"Select names", luciole::TypingMode::Typeahead}}
   );
+  addBool(P::SingleClickLocationEdit, "Single-click location bar to edit");
   addBool(P::ConfirmPermanentDeletion, "Confirm permanent deletion");
   addBool(P::ShowPermanentDeletion, "Show Delete Permanently in context menus");
   addBool(P::SwitchToNewTab, "Switch to new folder tabs");
