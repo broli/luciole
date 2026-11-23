@@ -21,6 +21,7 @@ class InputDispatcher;
 class Label;
 class Node;
 class RenderContext;
+class Select;
 class WaylandConnection;
 struct KeyboardEvent;
 struct PointerEvent;
@@ -62,7 +63,10 @@ private:
   bool saving() const { return m_request.mode != luciole::FileChooserMode::Open; }
   luciole::ChooserMode mode() const;
   luciole::ChooserDecision decision(const std::vector<luciole::DirectoryEntry>& entries, bool refresh = false);
+  const luciole::FileFilter* activeFilter() const noexcept;
+  void applyActiveFilter(std::size_t index);
   void selectFilter(std::size_t index);
+  void syncFilterFromName(bool allowWildcard);
   void apply(const luciole::ChooserDecision& decision);
   void open(const std::vector<luciole::DirectoryEntry>& targets);
   void
@@ -97,8 +101,9 @@ private:
   std::function<void()> m_close;
   InputDispatcher* m_dispatcher = nullptr;
   std::vector<luciole::FileChooserFilter> m_filters;
+  std::vector<luciole::FileFilter> m_compiledFilters;
   std::size_t m_activeFilter = 0;
-  std::optional<luciole::FileFilter> m_filter;
+  Select* m_filterSelect = nullptr;
   // Choice ID and current value, in request order.
   std::vector<std::pair<std::string, std::string>> m_choices;
   Button* m_accept = nullptr;

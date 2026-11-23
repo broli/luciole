@@ -153,6 +153,96 @@ namespace {
     TEST_CHECK(!luciole::fileNameProblem("../etc/passwd").empty());
     TEST_CHECK(!luciole::fileNameProblem(std::string_view("a\0b", 3)).empty());
   }
+
+  struct SaveFilterFixture {
+    using FileFilter = luciole::FileFilter;
+    using Kind = luciole::FilePattern::Kind;
+    static constexpr std::size_t kKrita = 1;
+    static constexpr std::size_t kPng = 2;
+    static constexpr std::size_t kJpeg = 3;
+    static constexpr std::size_t kAllFiles = 4;
+
+    FileFilter allImages{
+        {{.kind = Kind::Glob, .pattern = "*.kra"},
+         {.kind = Kind::Glob, .pattern = "*.png"},
+         {.kind = Kind::Glob, .pattern = "*.jpg"},
+         {.kind = Kind::Glob, .pattern = "*.jpeg"}}
+    };
+    FileFilter kra{{{.kind = Kind::Glob, .pattern = "*.kra"}}};
+    FileFilter png{{{.kind = Kind::Glob, .pattern = "*.png"}}};
+    FileFilter jpeg{{{.kind = Kind::Glob, .pattern = "*.jpg"}, {.kind = Kind::Glob, .pattern = "*.jpeg"}}};
+    FileFilter allFiles{{{.kind = Kind::Glob, .pattern = "*"}}};
+    FileFilter tarGz{{{.kind = Kind::Glob, .pattern = "*.tar.gz"}}};
+    FileFilter zip{{{.kind = Kind::Glob, .pattern = "*.zip"}}};
+    FileFilter txt{{{.kind = Kind::Glob, .pattern = "*.txt"}}};
+    FileFilter mimePlain{{{.kind = Kind::MimeType, .pattern = "text/plain"}}};
+    std::vector<FileFilter> list{allImages, kra, png, jpeg, allFiles, tarGz, zip, txt};
+  };
+
+  void testExtensionReplacement() {
+    const SaveFilterFixture f;
+    TEST_CHECK(luciole::applyChooserFilterExtension("drawing.kra", f.png, f.list) == "drawing.png");
+    TEST_CHECK(luciole::applyChooserFilterExtension("notes.c", f.mimePlain, f.list) == "notes.txt");
+    TEST_CHECK(luciole::applyChooserFilterExtension("notes.txt", f.mimePlain, f.list) == "notes.txt");
+    TEST_CHECK(luciole::applyChooserFilterExtension("photo.jpeg", f.jpeg, f.list) == "photo.jpeg");
+    TEST_CHECK(luciole::applyChooserFilterExtension("photo.kra", f.jpeg, f.list) == "photo.jpg");
+    TEST_CHECK(luciole::applyChooserFilterExtension("drawing.png", f.allFiles, f.list) == "drawing.png");
+    TEST_CHECK(luciole::applyChooserFilterExtension("Untitled", f.png, f.list) == "Untitled.png");
+    TEST_CHECK(luciole::applyChooserFilterExtension("my.art.v2.kra", f.png, f.list) == "my.art.v2.png");
+    TEST_CHECK(luciole::applyChooserFilterExtension("my.project.v1", f.png, f.list) == "my.project.v1.png");
+    TEST_CHECK(luciole::applyChooserFilterExtension("backup.tar.gz", f.zip, f.list) == "backup.zip");
+    TEST_CHECK(luciole::applyChooserFilterExtension("backup.tar.lz", f.zip, f.list) == "backup.zip");
+    TEST_CHECK(luciole::applyChooserFilterExtension("backup.tar.gz", f.tarGz, f.list) == "backup.tar.gz");
+    TEST_CHECK(luciole::applyChooserFilterExtension("archive.7z", f.zip, f.list) == "archive.zip");
+    TEST_CHECK(luciole::applyChooserFilterExtension(".profile", f.txt, f.list) == ".profile.txt");
+    TEST_CHECK(luciole::applyChooserFilterExtension("", f.png, f.list).empty());
+    TEST_CHECK(luciole::applyChooserFilterExtension(".", f.png, f.list) == ".");
+    TEST_CHECK(luciole::applyChooserFilterExtension("..", f.png, f.list) == "..");
+    TEST_CHECK(luciole::applyChooserFilterExtension("drawing.", f.png, f.list) == "drawing.png");
+  }
+
+  void testBareNameCompletion() {
+    const SaveFilterFixture f;
+    TEST_CHECK(luciole::completeChooserSaveName("sketch", f.png) == "sketch.png");
+    TEST_CHECK(luciole::completeChooserSaveName("project.v1", f.png) == "project.v1.png");
+    TEST_CHECK(luciole::completeChooserSaveName(".bashrc", f.txt) == ".bashrc.txt");
+    TEST_CHECK(luciole::completeChooserSaveName("sketch.", f.png) == "sketch.png");
+    TEST_CHECK(luciole::completeChooserSaveName("sketch.webp", f.png) == "sketch.webp");
+    TEST_CHECK(luciole::completeChooserSaveName("archive.7z", f.png) == "archive.7z");
+    TEST_CHECK(luciole::completeChooserSaveName("sketch", f.allFiles) == "sketch");
+  }
+
+  void testFilterMatchingAndStem() {
+    const SaveFilterFixture f;
+    TEST_CHECK(!luciole::matchingChooserFilter("sketch", f.list, SaveFilterFixture::kKrita).has_value());
+    TEST_CHECK(!luciole::matchingChooserFilter("project.v1", f.list, SaveFilterFixture::kKrita).has_value());
+    TEST_CHECK(!luciole::matchingChooserFilter(".bashrc", f.list, SaveFilterFixture::kKrita).has_value());
+    TEST_CHECK(
+        luciole::matchingChooserFilter("sketch.png", f.list, SaveFilterFixture::kKrita) == SaveFilterFixture::kPng
+    );
+    TEST_CHECK(
+        luciole::matchingChooserFilter("photo.jpeg", f.list, SaveFilterFixture::kJpeg) == SaveFilterFixture::kJpeg
+    );
+    TEST_CHECK(
+        luciole::matchingChooserFilter("photo.jpg", f.list, SaveFilterFixture::kPng) == SaveFilterFixture::kJpeg
+    );
+    TEST_CHECK(
+        luciole::matchingChooserFilter("sketch.png", f.list, SaveFilterFixture::kAllFiles) == SaveFilterFixture::kPng
+    );
+    TEST_CHECK(
+        !luciole::matchingChooserFilter("sketch.customext", f.list, SaveFilterFixture::kKrita, false).has_value()
+    );
+    TEST_CHECK(
+        luciole::matchingChooserFilter("sketch.customext", f.list, SaveFilterFixture::kKrita, true)
+        == SaveFilterFixture::kAllFiles
+    );
+
+    TEST_CHECK(luciole::chooserStemLength("drawing.kra", f.list) == 7);
+    TEST_CHECK(luciole::chooserStemLength("archive.tar.gz", f.list) == 7);
+    TEST_CHECK(luciole::chooserStemLength(".bashrc", f.list) == 7);
+    TEST_CHECK(luciole::chooserStemLength("Untitled", f.list) == 8);
+    TEST_CHECK(luciole::chooserStemLength("my.project.v1", f.list) == 13);
+  }
 } // namespace
 
 int main() {
@@ -164,6 +254,9 @@ int main() {
     testSelection();
     testSaveNames();
     testFileNames();
+    testExtensionReplacement();
+    testBareNameCompletion();
+    testFilterMatchingAndStem();
     std::println("chooser policy checks passed");
     return 0;
   } catch (const std::exception& error) {

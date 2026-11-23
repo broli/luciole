@@ -1,10 +1,13 @@
 #pragma once
 
 #include "browser/directory_model.h"
+#include "fs/file_filter.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -33,4 +36,15 @@ namespace luciole {
   std::vector<DirectoryEntry> chooserSelection(const DirectoryModel& model);
   // Why `name` (raw bytes) cannot name a new item in a folder; empty when it can.
   std::string_view fileNameProblem(std::string_view name);
+  // Byte length of `name` before any trailing extension.
+  std::size_t chooserStemLength(std::string_view name, std::span<const FileFilter> filters);
+  // Replaces or appends `active`'s primary extension on `name` unless `name` already matches `active`.
+  std::string
+  applyChooserFilterExtension(std::string_view name, const FileFilter& active, std::span<const FileFilter> filters);
+  // Appends `active`'s primary extension when `name` has no extension of its own.
+  std::string completeChooserSaveName(std::string_view name, const FileFilter& active);
+  // Index of the narrowest filter in `filters` matching `name`'s extension, or std::nullopt.
+  std::optional<std::size_t> matchingChooserFilter(
+      std::string_view name, std::span<const FileFilter> filters, std::size_t active, bool allowWildcard = false
+  );
 } // namespace luciole

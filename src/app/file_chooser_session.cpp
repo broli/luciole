@@ -31,14 +31,14 @@ namespace {
     return brief.symlink || brief.type == luciole::FileType::Symlink || brief.type == luciole::FileType::Unknown;
   }
 
-  luciole::DirectoryModel::EntryFilter entryFilter(bool directory, const std::optional<luciole::FileFilter>& filter) {
+  luciole::DirectoryModel::EntryFilter entryFilter(bool directory, const luciole::FileFilter* filter) {
     using luciole::FileType;
     if (directory) {
       return [](const luciole::EntryBrief& brief, const luciole::DirectoryEntry*) {
         return brief.type == FileType::Directory || unresolved(brief);
       };
     }
-    if (!filter) {
+    if (filter == nullptr) {
       return {};
     }
     return [filter = *filter](const luciole::EntryBrief& brief, const luciole::DirectoryEntry* known) {
@@ -67,8 +67,14 @@ FileChooserSession::FileChooserSession(
       m_activeFilter = static_cast<std::size_t>(found - m_filters.begin());
     }
   }
-  if (!m_filters.empty()) {
-    m_filter.emplace(m_filters[m_activeFilter].patterns);
+  m_compiledFilters.reserve(m_filters.size());
+  for (const auto& filter : m_filters) {
+    m_compiledFilters.emplace_back(filter.patterns);
+  }
+  if (!m_request.currentFilter && m_request.mode == luciole::FileChooserMode::Save && !m_request.currentName.empty()) {
+    if (const auto match = luciole::matchingChooserFilter(m_request.currentName, m_compiledFilters, m_activeFilter)) {
+      m_activeFilter = *match;
+    }
   }
   for (const auto& choice : m_request.choices) {
     if (choice.options.empty()) {
@@ -215,7 +221,7 @@ std::unique_ptr<Node> FileChooserSession::attach(
   // Saving names one destination; SaveFiles chooses a folder, like a folder chooser.
   const bool folders = m_request.directory || m_request.mode == luciole::FileChooserMode::SaveFiles;
   page.browser().model().setSingleSelection(!m_request.multiple || saving());
-  if (auto filter = entryFilter(folders, m_filter)) {
+  if (auto filter = entryFilter(folders, activeFilter())) {
     page.browser().model().setEntryFilter(std::move(filter));
   }
 
@@ -224,10 +230,14 @@ std::unique_ptr<Node> FileChooserSession::attach(
   );
   const auto plain = [](Label& label) { label.setUseMarkup(false); };
   if (m_request.mode == luciole::FileChooserMode::Save) {
+    const auto* active = activeFilter();
+    const std::string initialName = active != nullptr && !m_request.currentName.empty()
+        ? luciole::applyChooserFilterExtension(m_request.currentName, *active, m_compiledFilters)
+        : m_request.currentName;
     footer->addChild(
         ui::input(
             {.out = &m_name,
-             .value = m_request.currentName,
+             .value = initialName,
              .placeholder = "Name",
              .width = 280.0F,
              .onChange =
@@ -238,6 +248,7 @@ std::unique_ptr<Node> FileChooserSession::attach(
                    m_saveError.clear();
                    m_saveToken.cancel();
                    m_savePending = false;
+                   syncFilterFromName(false);
                  },
              .onSubmit = [this](const std::string&) { save(); }}
         )
@@ -282,7 +293,8 @@ std::unique_ptr<Node> FileChooserSession::attach(
     }
     footer->addChild(
         ui::select(
-            {.options = std::move(names),
+            {.out = &m_filterSelect,
+             .options = std::move(names),
              .selectedIndex = m_activeFilter,
              .onSelectionChanged = [this](std::size_t index, std::string_view) { selectFilter(index); }}
         )
@@ -370,9 +382,7 @@ void FileChooserSession::syncSave() {
       // Type a name at once; the stem is selected so typing keeps the extension.
       m_nameFocused = true;
       m_dispatcher->setFocus(m_name->inputArea());
-      const auto& value = m_name->value();
-      const auto dot = value.rfind('.');
-      m_name->selectRange(0, dot != std::string::npos && dot > 0 ? dot : value.size());
+      m_name->selectRange(0, luciole::chooserStemLength(m_name->value(), m_compiledFilters));
     }
     const auto selection = luciole::chooserSelection(m_page->browser().model());
     if (selection.size() == 1) {
@@ -479,33 +489,54 @@ void FileChooserSession::finishOpen(
   apply(luciole::chooserDecision(mode(), m_page->location(), resolved));
 }
 
+const luciole::FileFilter* FileChooserSession::activeFilter() const noexcept {
+  return m_activeFilter < m_compiledFilters.size() ? &m_compiledFilters[m_activeFilter] : nullptr;
+}
+
+void FileChooserSession::applyActiveFilter(std::size_t index) {
+  m_activeFilter = index;
+  const bool folders = m_request.directory || m_request.mode == luciole::FileChooserMode::SaveFiles;
+  m_page->browser().model().setEntryFilter(entryFilter(folders, activeFilter()));
+}
+
 void FileChooserSession::save() {
-  if (m_call->finished()) {
+  if (m_call->finished() || m_savePending) {
     return;
   }
   const auto folder = m_page->location();
   if (!folder || !folder->isNative()) {
     return;
   }
-  const std::vector<std::string> names =
-      m_name != nullptr ? std::vector<std::string>{m_name->value()} : m_request.files;
   std::vector<luciole::Location> targets;
-  targets.reserve(names.size());
-  for (const auto& name : names) {
-    if (!luciole::fileNameProblem(name).empty()) {
-      if (m_name != nullptr) {
-        return;
-      }
-      // SaveFiles names come from the application; one that is not a plain name cannot be honoured.
-      kLog.warn("SaveFiles asked for an invalid name");
-      m_call->fail();
-      m_close();
+  std::optional<luciole::Location> rawDirTarget;
+  std::string rawName;
+  std::string completedName;
+  if (m_name != nullptr) {
+    rawName = m_name->value();
+    if (!luciole::fileNameProblem(rawName).empty()) {
       return;
     }
-    targets.push_back(folder->child(name));
-  }
-  if (m_savePending) {
-    return;
+    syncFilterFromName(true);
+    completedName = rawName;
+    if (const auto* active = activeFilter()) {
+      completedName = luciole::completeChooserSaveName(rawName, *active);
+    }
+    if (completedName != rawName) {
+      rawDirTarget = folder->child(rawName);
+    }
+    targets.push_back(folder->child(completedName));
+  } else {
+    targets.reserve(m_request.files.size());
+    for (const auto& name : m_request.files) {
+      if (!luciole::fileNameProblem(name).empty()) {
+        // SaveFiles names come from the application; one that is not a plain name cannot be honoured.
+        kLog.warn("SaveFiles asked for an invalid name");
+        m_call->fail();
+        m_close();
+        return;
+      }
+      targets.push_back(folder->child(name));
+    }
   }
   m_nameLookup.cancel();
   m_openAfterTypes.reset();
@@ -522,12 +553,34 @@ void FileChooserSession::save() {
     std::vector<luciole::Location> existing;
     std::optional<luciole::Location> folder;
   };
+  const auto isDirectory = [](const luciole::Location& target, const std::filesystem::file_status& status) {
+    std::error_code targetError;
+    return status.type() == std::filesystem::file_type::directory
+        || (status.type() == std::filesystem::file_type::symlink
+            && std::filesystem::is_directory(std::filesystem::status(*target.nativePath(), targetError))
+            && !targetError);
+  };
   const std::weak_ptr<int> lifetime = m_lifetime;
   luciole::runJob<Checked>(
       m_saveToken,
-      [targets = std::move(targets), enterFolders = m_name != nullptr, token = m_saveToken] mutable {
+      [targets = std::move(targets), rawDirTarget = std::move(rawDirTarget), enterFolders = m_name != nullptr,
+       token = m_saveToken, isDirectory] mutable {
         Checked result;
         result.targets = std::move(targets);
+        if (rawDirTarget) {
+          if (token.cancelled()) {
+            luciole::throwFileError(luciole::FileErrorKind::Cancelled, "Cancelled.");
+          }
+          std::error_code error;
+          const auto status = std::filesystem::symlink_status(rawDirTarget->nativePath().value_or(""), error);
+          if (error && error != std::errc::no_such_file_or_directory) {
+            luciole::throwErrno(error.value());
+          }
+          if (std::filesystem::exists(status) && isDirectory(*rawDirTarget, status)) {
+            result.folder = *rawDirTarget;
+            return result;
+          }
+        }
         for (const auto& target : result.targets) {
           if (token.cancelled()) {
             luciole::throwFileError(luciole::FileErrorKind::Cancelled, "Cancelled.");
@@ -542,25 +595,19 @@ void FileChooserSession::save() {
           }
           result.existing.push_back(target);
           // A folder named like the file is entered, as typing a folder's name does in a location.
-          if (enterFolders) {
-            std::error_code targetError;
-            if (status.type() == std::filesystem::file_type::directory
-                || (status.type() == std::filesystem::file_type::symlink
-                    && std::filesystem::is_directory(std::filesystem::status(*target.nativePath(), targetError))
-                    && !targetError)) {
-              result.folder = target;
-              break;
-            }
+          if (enterFolders && isDirectory(target, status)) {
+            result.folder = target;
+            break;
           }
         }
         return result;
       },
-      [this, lifetime, token = m_saveToken, folder, names](auto result) {
+      [this, lifetime, token = m_saveToken, folder, rawName, completedName](auto result) {
         if (lifetime.expired() || token.cancelled()) {
           return;
         }
         m_savePending = false;
-        if (m_call->finished() || m_page->location() != folder || (m_name && m_name->value() != names.front())) {
+        if (m_call->finished() || m_page->location() != folder || (m_name && m_name->value() != rawName)) {
           return;
         }
         m_surface->requestUpdate();
@@ -572,6 +619,10 @@ void FileChooserSession::save() {
           m_name->setValue({});
           m_confirm.clear();
         } else {
+          if (m_name != nullptr && completedName != rawName) {
+            m_name->setValue(completedName);
+            m_confirm.clear();
+          }
           savedTargets(std::move(result->targets), std::move(result->existing));
         }
       }
@@ -593,10 +644,33 @@ void FileChooserSession::selectFilter(std::size_t index) {
   if (index >= m_filters.size()) {
     return;
   }
-  m_activeFilter = index;
-  m_filter.emplace(m_filters[index].patterns);
-  const bool folders = m_request.directory || m_request.mode == luciole::FileChooserMode::SaveFiles;
-  m_page->browser().model().setEntryFilter(entryFilter(folders, m_filter));
+  applyActiveFilter(index);
+  if (m_name != nullptr) {
+    const std::string updated =
+        luciole::applyChooserFilterExtension(m_name->value(), m_compiledFilters[index], m_compiledFilters);
+    if (updated != m_name->value()) {
+      m_name->setValue(updated);
+      m_confirm.clear();
+      m_saveError.clear();
+      m_saveToken.cancel();
+      m_savePending = false;
+      m_name->selectRange(0, luciole::chooserStemLength(m_name->value(), m_compiledFilters));
+    }
+  }
+}
+
+void FileChooserSession::syncFilterFromName(bool allowWildcard) {
+  if (m_name == nullptr || m_compiledFilters.empty()) {
+    return;
+  }
+  const auto match = luciole::matchingChooserFilter(m_name->value(), m_compiledFilters, m_activeFilter, allowWildcard);
+  if (!match || *match == m_activeFilter) {
+    return;
+  }
+  applyActiveFilter(*match);
+  if (m_filterSelect != nullptr) {
+    m_filterSelect->setSelectedIndexSilently(*match);
+  }
 }
 
 void FileChooserSession::apply(const luciole::ChooserDecision& decision) {

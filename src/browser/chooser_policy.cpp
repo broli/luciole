@@ -1,10 +1,39 @@
 #include "browser/chooser_policy.h"
 
 #include <algorithm>
+#include <cctype>
+#include <format>
+#include <limits>
 #include <sys/stat.h>
 
 namespace {
   using luciole::FileType;
+
+  bool isAlphaExtension(std::string_view tail) {
+    return !tail.empty()
+        && std::ranges::all_of(tail, [](char ch) { return std::isalpha(static_cast<unsigned char>(ch)) != 0; });
+  }
+
+  std::size_t trailingExtensionLength(std::string_view name, std::span<const luciole::FileFilter> filters) {
+    if (name.empty() || name == "." || name == "..") {
+      return 0;
+    }
+    std::size_t best = 0;
+    for (const auto& filter : filters) {
+      best = std::max(best, filter.matchedExtensionLength(name));
+    }
+    if (best > 0) {
+      return best;
+    }
+    if (const std::size_t known = luciole::knownExtensionLength(name); known > 0) {
+      return known;
+    }
+    const auto dot = name.rfind('.');
+    if (dot == std::string_view::npos || dot == 0 || dot + 1 >= name.size()) {
+      return 0;
+    }
+    return isAlphaExtension(name.substr(dot + 1)) ? name.size() - dot : 0;
+  }
 
   luciole::ChooserDecision unavailable(std::string_view reason) {
     return {.kind = luciole::ChooserDecision::Kind::Unavailable, .locations = {}, .reason = reason};
@@ -104,4 +133,64 @@ std::string_view luciole::fileNameProblem(std::string_view name) {
     return "A file name cannot contain “/”.";
   }
   return {};
+}
+
+std::size_t luciole::chooserStemLength(std::string_view name, std::span<const FileFilter> filters) {
+  return name.size() - trailingExtensionLength(name, filters);
+}
+
+std::string luciole::applyChooserFilterExtension(
+    std::string_view name, const FileFilter& active, std::span<const FileFilter> filters
+) {
+  if (name.empty() || name == "." || name == "..") {
+    return std::string(name);
+  }
+  const std::string ext = active.primaryExtension();
+  if (ext.empty() || (active.matchedExtensionLength(name) > 0 && active.matches(name, nullptr))) {
+    return std::string(name);
+  }
+  const std::size_t strip = name.ends_with('.') ? 1 : trailingExtensionLength(name, filters);
+  return std::format("{}{}", name.substr(0, name.size() - strip), ext);
+}
+
+std::string luciole::completeChooserSaveName(std::string_view name, const FileFilter& active) {
+  if (name.empty() || name == "." || name == ".." || (!name.ends_with('.') && trailingExtensionLength(name, {}) > 0)) {
+    return std::string(name);
+  }
+  const std::string ext = active.primaryExtension();
+  if (ext.empty()) {
+    return std::string(name);
+  }
+  const std::string_view stem = name.ends_with('.') ? name.substr(0, name.size() - 1) : name;
+  return std::format("{}{}", stem, ext);
+}
+
+std::optional<std::size_t> luciole::matchingChooserFilter(
+    std::string_view name, std::span<const FileFilter> filters, std::size_t active, bool allowWildcard
+) {
+  if (trailingExtensionLength(name, filters) == 0) {
+    return std::nullopt;
+  }
+  if (active < filters.size()
+      && filters[active].matches(name, nullptr)
+      && !filters[active].primaryExtension().empty()) {
+    return active;
+  }
+  std::optional<std::size_t> bestSpecific;
+  std::optional<std::size_t> firstWildcard;
+  std::size_t bestPatternCount = std::numeric_limits<std::size_t>::max();
+  for (std::size_t i = 0; i < filters.size(); ++i) {
+    if (!filters[i].matches(name, nullptr)) {
+      continue;
+    }
+    if (!filters[i].primaryExtension().empty()) {
+      if (const std::size_t count = filters[i].patternCount(); count < bestPatternCount) {
+        bestPatternCount = count;
+        bestSpecific = i;
+      }
+    } else if (allowWildcard && !firstWildcard) {
+      firstWildcard = i;
+    }
+  }
+  return bestSpecific ? bestSpecific : firstWildcard;
 }
