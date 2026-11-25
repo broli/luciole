@@ -62,7 +62,7 @@ namespace {
     if (pattern.kind == luciole::FilePattern::Kind::Glob) {
       return pattern.pattern == "*" || pattern.pattern == "*.*";
     }
-    return pattern.pattern == "*/*" || pattern.pattern.ends_with("/*");
+    return pattern.pattern.ends_with("/*");
   }
 
   struct MimeGlobEntry {
