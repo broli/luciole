@@ -43,7 +43,8 @@ namespace luciole {
   applyChooserFilterExtension(std::string_view name, const FileFilter& active, std::span<const FileFilter> filters);
   // Appends `active`'s primary extension when `name` has no extension of its own.
   std::string completeChooserSaveName(std::string_view name, const FileFilter& active);
-  // Index of the narrowest filter in `filters` matching `name`'s extension, or std::nullopt.
+  // Index of the filter matching `name`'s extension: `active` when it has a concrete extension and matches, else the
+  // narrowest such filter, else (with `allowWildcard`) the first matching filter without one; std::nullopt otherwise.
   std::optional<std::size_t> matchingChooserFilter(
       std::string_view name, std::span<const FileFilter> filters, std::size_t active, bool allowWildcard = false
   );
