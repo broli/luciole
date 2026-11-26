@@ -1,18 +1,12 @@
 #include "browser/chooser_policy.h"
 
 #include <algorithm>
-#include <cctype>
 #include <format>
 #include <limits>
 #include <sys/stat.h>
 
 namespace {
   using luciole::FileType;
-
-  bool isAlphaExtension(std::string_view tail) {
-    return !tail.empty()
-        && std::ranges::all_of(tail, [](char ch) { return std::isalpha(static_cast<unsigned char>(ch)) != 0; });
-  }
 
   std::size_t trailingExtensionLength(std::string_view name, std::span<const luciole::FileFilter> filters) {
     if (name.empty() || name == "." || name == "..") {
@@ -25,14 +19,7 @@ namespace {
     if (best > 0) {
       return best;
     }
-    if (const std::size_t known = luciole::knownExtensionLength(name); known > 0) {
-      return known;
-    }
-    const auto dot = name.rfind('.');
-    if (dot == std::string_view::npos || dot == 0 || dot + 1 >= name.size()) {
-      return 0;
-    }
-    return isAlphaExtension(name.substr(dot + 1)) ? name.size() - dot : 0;
+    return luciole::knownExtensionLength(name);
   }
 
   luciole::ChooserDecision unavailable(std::string_view reason) {
@@ -136,7 +123,11 @@ std::string_view luciole::fileNameProblem(std::string_view name) {
 }
 
 std::size_t luciole::chooserStemLength(std::string_view name, std::span<const FileFilter> filters) {
-  return name.size() - trailingExtensionLength(name, filters);
+  if (const std::size_t extLen = trailingExtensionLength(name, filters); extLen > 0) {
+    return name.size() - extLen;
+  }
+  const auto dot = name.rfind('.');
+  return dot != std::string_view::npos && dot > 0 && dot + 1 < name.size() ? dot : name.size();
 }
 
 std::string luciole::applyChooserFilterExtension(

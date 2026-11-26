@@ -190,6 +190,8 @@ namespace {
     TEST_CHECK(luciole::applyChooserFilterExtension("Untitled", f.png, f.list) == "Untitled.png");
     TEST_CHECK(luciole::applyChooserFilterExtension("my.art.v2.kra", f.png, f.list) == "my.art.v2.png");
     TEST_CHECK(luciole::applyChooserFilterExtension("my.project.v1", f.png, f.list) == "my.project.v1.png");
+    TEST_CHECK(luciole::applyChooserFilterExtension("Mr.Robot", f.png, f.list) == "Mr.Robot.png");
+    TEST_CHECK(luciole::applyChooserFilterExtension("notes.final", f.png, f.list) == "notes.final.png");
     TEST_CHECK(luciole::applyChooserFilterExtension("backup.tar.gz", f.zip, f.list) == "backup.zip");
     TEST_CHECK(luciole::applyChooserFilterExtension("backup.tar.lz", f.zip, f.list) == "backup.zip");
     TEST_CHECK(luciole::applyChooserFilterExtension("backup.tar.gz", f.tarGz, f.list) == "backup.tar.gz");
@@ -205,6 +207,8 @@ namespace {
     const SaveFilterFixture f;
     TEST_CHECK(luciole::completeChooserSaveName("sketch", f.png) == "sketch.png");
     TEST_CHECK(luciole::completeChooserSaveName("project.v1", f.png) == "project.v1.png");
+    TEST_CHECK(luciole::completeChooserSaveName("Mr.Robot", f.png) == "Mr.Robot.png");
+    TEST_CHECK(luciole::completeChooserSaveName("notes.final", f.png) == "notes.final.png");
     TEST_CHECK(luciole::completeChooserSaveName(".bashrc", f.txt) == ".bashrc.txt");
     TEST_CHECK(luciole::completeChooserSaveName("sketch.", f.png) == "sketch.png");
     TEST_CHECK(luciole::completeChooserSaveName("sketch.webp", f.png) == "sketch.webp");
@@ -229,11 +233,10 @@ namespace {
     TEST_CHECK(
         luciole::matchingChooserFilter("sketch.png", f.list, SaveFilterFixture::kAllFiles) == SaveFilterFixture::kPng
     );
+    TEST_CHECK(!luciole::matchingChooserFilter("Mr.Robot", f.list, SaveFilterFixture::kKrita, true).has_value());
+    TEST_CHECK(!luciole::matchingChooserFilter("sketch.webp", f.list, SaveFilterFixture::kKrita, false).has_value());
     TEST_CHECK(
-        !luciole::matchingChooserFilter("sketch.customext", f.list, SaveFilterFixture::kKrita, false).has_value()
-    );
-    TEST_CHECK(
-        luciole::matchingChooserFilter("sketch.customext", f.list, SaveFilterFixture::kKrita, true)
+        luciole::matchingChooserFilter("sketch.webp", f.list, SaveFilterFixture::kKrita, true)
         == SaveFilterFixture::kAllFiles
     );
 
@@ -241,7 +244,7 @@ namespace {
     TEST_CHECK(luciole::chooserStemLength("archive.tar.gz", f.list) == 7);
     TEST_CHECK(luciole::chooserStemLength(".bashrc", f.list) == 7);
     TEST_CHECK(luciole::chooserStemLength("Untitled", f.list) == 8);
-    TEST_CHECK(luciole::chooserStemLength("my.project.v1", f.list) == 13);
+    TEST_CHECK(luciole::chooserStemLength("my.project.v1", f.list) == 10);
   }
 } // namespace
 
